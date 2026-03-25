@@ -98,3 +98,57 @@ async def search_korean_stock(q: str):
     except Exception as e:
         print(f"메모리 검색 에러: {e}")
         return {"status": "error", "message": str(e)}
+    # 🚨 main.py 파일의 가장 아랫부분에 이 코드를 추가하고 깃허브에 Push(배포) 하십시오.
+
+@app.get("/quote/kr/{ticker}")
+async def get_kr_quote(ticker: str):
+    try:
+        # 티커에서 숫자 6자리만 추출 (예: 005930.KS -> 005930)
+        code = ticker.split('.')[0]
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        
+        # 봇 차단을 막기 위한 User-Agent 설정
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        res = requests.get(url, headers=headers)
+        soup = BeautifulSoup(res.text, "html.parser")
+        
+        # 1. 현재가 추출
+        today_price = soup.select_one('.no_today .blind').text
+        
+        # 2. 전일대비 변동 및 부호 추출
+        exday = soup.select_one('.no_exday')
+        blinds = exday.select('.blind')
+        change_val = blinds[0].text if len(blinds) > 0 else "0"
+        change_pct = blinds[1].text if len(blinds) > 1 else "0"
+        
+        # 상승/하락 판별 (클래스명으로 판별)
+        is_up = "up" in exday.get('class', []) or "red02" in exday.parent.get('class', [])
+        is_down = "down" in exday.get('class', []) or "nv01" in exday.parent.get('class', [])
+        sign = "+" if is_up else ("-" if is_down else "")
+
+        # 3. 전일가, 고가, 시가, 저가 추출
+        info_tds = soup.select('.no_info td .blind')
+        prev_close = info_tds[0].text
+        high = info_tds[1].text
+        open_val = info_tds[3].text
+        low = info_tds[4].text
+        
+        # 4. 기준 시간 추출 (예: 2026.03.25 12:00 기준)
+        time_info_el = soup.select_one('.description .date')
+        time_info = time_info_el.text if time_info_el else "실시간"
+
+        return {
+            "status": "success",
+            "price": today_price,
+            "change": f"{sign}{change_val}",
+            "change_percent": f"{sign}{change_pct}%",
+            "prev_close": prev_close,
+            "high": high,
+            "open": open_val,
+            "low": low,
+            "time": time_info,
+            "is_positive": is_up,
+            "is_negative": is_down
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
