@@ -16,6 +16,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# main.py에 추가
+@app.get("/")
+async def health_check():
+
+    return {"status": "alive", "message": "서버가 깨어있습니다!"}
+
 # 🚨 서버 메모리에 한국 주식 명부를 저장할 변수
 krx_df = None
 
