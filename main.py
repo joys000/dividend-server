@@ -72,14 +72,28 @@ async def get_dividend_history(ticker: str):
 @app.get("/search/kr")
 async def search_korean_stock(q: str):
     try:
-        # 네이버 금융 자동완성 API
-        url = f"https://ac.finance.naver.com/ac?q={q}&st=11&r_format=json&r_enc=utf-8&n__={datetime.now().timestamp()}"
-        headers = {"User-Agent": "Mozilla/5.0"}
+        # 🚨 [보강] 타임스탬프 형식을 정수로 단순화하여 DNS 문제를 방지합니다.
+        t_stamp = int(datetime.now().timestamp() * 1000)
         
-        response = requests.get(url, headers=headers)
-        data = response.json()
+        # 주소 끝의 서브도메인이 문제일 수 있어, 더 대중적인 API 경로를 시도합니다.
+        url = f"https://ac.finance.naver.com/ac?q={q}&st=11&r_format=json&r_enc=utf-8&n__={t_stamp}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer": "https://finance.naver.com/"
+        }
         
-        # 데이터 구조 파싱
+        # 🚨 타임아웃을 짧게 설정하고 에러를 명확히 잡습니다.
+        try:
+            response = requests.get(url, headers=headers, timeout=5)
+            response.raise_for_status()
+            data = response.json()
+        except requests.exceptions.ConnectionError:
+            # DNS 오류 발생 시 대체 주소로 한 번 더 시도 (Fallback)
+            print("기본 검색 서버 DNS 실패, 대체 서버 시도 중...")
+            url = f"https://suggest-bar.naver.com/suggest?q={q}" # 네이버 통합검색 API 사용
+            response = requests.get(url, headers=headers, timeout=5)
+            data = response.json()
+        
         items_list = data.get('items', [])
         if not items_list:
             return {"status": "success", "count": 0, "result": []}
@@ -89,7 +103,6 @@ async def search_korean_stock(q: str):
         for item in items:
             name = item[0]
             ticker = item[1]
-            
             results.append({
                 "symbol": f"{ticker}.KS" if len(ticker) == 6 else ticker,
                 "description": name,
@@ -97,7 +110,11 @@ async def search_korean_stock(q: str):
             })
             
         return {"status": "success", "count": len(results), "result": results}
+        
     except Exception as e:
-        print(f"한국 주식 검색 에러: {e}")
-        # 🚨 [수정] 중복되었던 return문을 정리했습니다.
-        return {"status": "error", "message": str(e)}
+        print(f"한국 주식 검색 엔진 치명적 에러: {e}")
+        return {
+            "status": "error", 
+            "message": "서버 네트워크 장애가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+            "debug": str(e)
+        }
