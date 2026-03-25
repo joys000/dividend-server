@@ -1,3 +1,4 @@
+import json
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -77,4 +78,34 @@ async def get_dividend_history(ticker: str):
         
     except Exception as e:
         print(f"배당금 데이터 에러: {e}")
+@app.get("/search/kr")
+async def search_korean_stock(q: str):
+    try:
+        # 네이버 금융의 실시간 자동완성 API를 활용 (로컬 DB 필요 없음)
+        # st=11 (국내주식), r_format=json (JSON 형식)
+        url = f"https://ac.finance.naver.com/ac?q={q}&st=11&r_format=json&r_enc=utf-8&n__={datetime.now().timestamp()}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        response = requests.get(url, headers=headers)
+        data = response.json()
+        
+        # 네이버 응답 구조: data['items'][0]에 결과 리스트가 담겨 있음
+        items = data.get('items', [[]])[0]
+        
+        results = []
+        for item in items:
+            # item 구조: ["종목명", "티커", "기타1", "기타2", ...]
+            name = item[0]
+            ticker = item[1]
+            
+            results.append({
+                "symbol": f"{ticker}.KS" if len(ticker) == 6 else ticker, # 6자리 숫자는 한국 티커 처리
+                "description": name,
+                "type": "KOREA"
+            })
+            
+        return {"status": "success", "count": len(results), "result": results}
+    
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
         return {"status": "error", "message": str(e)}
