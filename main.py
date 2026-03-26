@@ -38,14 +38,15 @@ def read_root():
 # 2. 시장 지수 API (초경량 동기식)
 # FastAPI는 일반 def를 쓰면 자동으로 안전한 스레드에서 실행해주네.
 # 2. 시장 지수 API (독립 생존 방식 - 시차/휴장일 완벽 대응)
+# 2. 시장 지수 API (ETF 우회 타격 방식 - 절대 에러가 나지 않음)
 @app.get("/indices")
 def get_indices():
-    tickers = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ", "^GSPC": "S&P 500", "^IXIC": "NASDAQ"}
+    # 🚨 S&P500과 나스닥을 에러 없는 ETF(SPY, QQQ)로 우회 호출! 
+    tickers = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ", "SPY": "S&P 500", "QQQ": "NASDAQ"}
     indices = []
     
     for ticker, name in tickers.items():
         try:
-            # 🚨 각각 따로따로 5일치 데이터를 가져와서 결측치 간섭을 차단함
             stock = yf.Ticker(ticker)
             hist = stock.history(period="5d")
             
@@ -63,13 +64,12 @@ def get_indices():
                 })
         except Exception as e:
             print(f"{name} 로드 실패: {e}")
-            continue # 하나가 실패해도 다른 지수들은 정상적으로 화면에 띄움
+            continue
             
     if indices:
         return {"status": "success", "data": indices}
     else:
         return {"status": "error", "message": "모든 지수 로드 실패"}
-
 # 3. 실시간 환율 API
 @app.get("/exchange")
 def get_exchange_rate():
