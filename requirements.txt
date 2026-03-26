@@ -1,9 +1,10 @@
 fastapi
 uvicorn
+supabase
 requests
 beautifulsoup4
 yfinance
 pandas
 lxml
 finance-datareader
-supabase
+
