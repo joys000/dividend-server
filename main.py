@@ -5,9 +5,11 @@ from bs4 import BeautifulSoup
 import yfinance as yf
 import FinanceDataReader as fdr
 import pandas as pd
+import asyncio
 
 app = FastAPI()
 
+# CORS 설정 (프론트엔드 통신 허용)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,46 +18,65 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# main.py에 추가
-@app.get("/")
-async def health_check():
+# 🚨 [추가] 한국 주식 데이터 메모리 로드 (서버 시작 시 1회 실행)
+print("🚀 KRX 주식 목록 로딩 중...")
+try:
+    krx_df = fdr.StockListing('KRX')
+    print("✅ 로딩 완료!")
+except Exception as e:
+    print(f"❌ 로딩 실패: {e}")
+    krx_df = pd.DataFrame()
 
-    return {"status": "alive", "message": "서버가 깨어있습니다!"}
-
-# 🚨 서버 메모리에 한국 주식 명부를 저장할 변수
-krx_df = None
-
-# 서버가 켜질 때 딱 한 번 실행되는 엔진 (KRX 전체 명부 다운로드)
-@app.on_event("startup")
-def load_krx_data():
-    global krx_df
-    try:
-        print("서버 시동: 한국거래소(KRX) 주식 명부 장전 중...")
-        # 한국거래소(코스피, 코스닥, 코넥스) 전체 종목 가져오기
-        krx_df = fdr.StockListing('KRX')
-        print(f"장전 완료: 총 {len(krx_df)}개 종목 대기 중.")
-    except Exception as e:
-        print(f"KRX 명부 장전 실패: {e}")
-
+# 1. 헬스 체크 (서버 예열용)
 @app.get("/")
 def read_root():
-    return {"message": "재우의 배당금 데이터 공장 가동 중 ⚙️"}
+    return {"status": "alive", "message": "재우의 배당금 데이터 공장 가동 중 ⚙️"}
 
+# 2. [신규] 시장 지수 API (홈페이지 전광판용)
+@app.get("/indices")
+async def get_indices():
+    try:
+        # 주요 지수 티커
+        tickers = ["^KS11", "^KQ11", "^GSPC", "^IXIC"]
+        # 최근 2일 데이터를 가져와서 전일 대비 변동폭 계산
+        data = yf.download(tickers, period="2d", interval="1d")['Close']
+        
+        indices = []
+        names = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ", "^GSPC": "S&P 500", "^IXIC": "NASDAQ"}
+        
+        last_row = data.iloc[-1]
+        prev_row = data.iloc[0]
+        
+        for ticker in tickers:
+            current = last_row[ticker]
+            prev = prev_row[ticker]
+            change = current - prev
+            pct = (change / prev) * 100
+            indices.append({
+                "name": names[ticker],
+                "price": round(current, 2),
+                "change": round(change, 2),
+                "pct": round(pct, 2)
+            })
+        return {"status": "success", "data": indices}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# 3. 실시간 환율 API (네이버 크롤링)
 @app.get("/exchange")
 async def get_exchange_rate():
     try:
         url = "https://finance.naver.com/marketindex/"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        
         soup = BeautifulSoup(response.text, "html.parser")
         rate_str = soup.select_one("#exchangeList > li.on > a.head.usd > div > span.value").text
         rate = float(rate_str.replace(",", ""))
-        return {"status": "success", "rate": rate, "source": "Naver"}
+        return {"status": "success", "rate": rate}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+# 4. 미국/한국 배당 히스토리 API
 @app.get("/dividend/{ticker}")
 async def get_dividend_history(ticker: str):
     try:
@@ -70,89 +91,58 @@ async def get_dividend_history(ticker: str):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# 🚨 네이버를 버리고, 서버 내부 메모리에서 초고속으로 검색하는 API
+# 5. 한국 주식 초고속 검색 API (메모리 기반)
 @app.get("/search/kr")
 async def search_korean_stock(q: str):
-    global krx_df
-    
-    # 데이터가 아직 로드되지 않았을 경우 방어 코드
-    if krx_df is None or krx_df.empty:
-        return {"status": "error", "message": "주식 데이터를 로딩 중입니다. 10초 후 다시 시도하세요."}
-
+    if krx_df.empty:
+        return {"status": "error", "message": "데이터 로딩 중입니다."}
     try:
-        # 대소문자 구분 없이 검색어 포함 여부 확인 (이름 또는 코드)
         mask = krx_df['Name'].str.contains(q, case=False, na=False) | krx_df['Code'].str.contains(q, na=False)
         filtered = krx_df[mask]
-        
         results = []
-        # 너무 많이 보내면 프론트가 뻗으므로 상위 10개만 전송
         for _, row in filtered.head(10).iterrows():
-            code = row['Code']
-            name = row['Name']
             market = row.get('Market', '')
-            
-            # 코스피는 .KS, 코스닥은 .KQ를 붙여 yfinance와 호환되게 만듦
-            suffix = ".KS" if market == "KOSPI" else ".KQ" if market == "KOSDAQ" else ".KS"
-            
+            suffix = ".KS" if market == "KOSPI" else ".KQ"
             results.append({
-                "symbol": f"{code}{suffix}",
-                "description": name,
+                "symbol": f"{row['Code']}{suffix}",
+                "description": row['Name'],
                 "type": "KOREA"
             })
-            
-        return {"status": "success", "count": len(results), "result": results}
+        return {"status": "success", "result": results}
     except Exception as e:
-        print(f"메모리 검색 에러: {e}")
         return {"status": "error", "message": str(e)}
-    # 🚨 main.py 파일의 가장 아랫부분에 이 코드를 추가하고 깃허브에 Push(배포) 하십시오.
 
+# 6. 한국 주식 현재가 상세 조회 (네이버 크롤링)
 @app.get("/quote/kr/{ticker}")
 async def get_kr_quote(ticker: str):
     try:
-        # 티커에서 숫자 6자리만 추출 (예: 005930.KS -> 005930)
         code = ticker.split('.')[0]
         url = f"https://finance.naver.com/item/main.naver?code={code}"
-        
-        # 봇 차단을 막기 위한 User-Agent 설정
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        headers = {"User-Agent": "Mozilla/5.0"}
         res = requests.get(url, headers=headers)
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # 1. 현재가 추출
         today_price = soup.select_one('.no_today .blind').text
-        
-        # 2. 전일대비 변동 및 부호 추출
         exday = soup.select_one('.no_exday')
         blinds = exday.select('.blind')
         change_val = blinds[0].text if len(blinds) > 0 else "0"
         change_pct = blinds[1].text if len(blinds) > 1 else "0"
         
-        # 상승/하락 판별 (클래스명으로 판별)
-        is_up = "up" in exday.get('class', []) or "red02" in exday.parent.get('class', [])
-        is_down = "down" in exday.get('class', []) or "nv01" in exday.parent.get('class', [])
+        is_up = "up" in exday.get('class', [])
+        is_down = "down" in exday.get('class', [])
         sign = "+" if is_up else ("-" if is_down else "")
 
-        # 3. 전일가, 고가, 시가, 저가 추출
         info_tds = soup.select('.no_info td .blind')
-        prev_close = info_tds[0].text
-        high = info_tds[1].text
-        open_val = info_tds[3].text
-        low = info_tds[4].text
-        
-        # 4. 기준 시간 추출 (예: 2026.03.25 12:00 기준)
-        time_info_el = soup.select_one('.description .date')
-        time_info = time_info_el.text if time_info_el else "실시간"
-
         return {
             "status": "success",
             "price": today_price,
             "change": f"{sign}{change_val}",
             "change_percent": f"{sign}{change_pct}%",
-            "prev_close": prev_close,
-            "high": high,
-            "open": open_val,
-            "low": low,
-            "time": time_info,
+            "prev_close": info_tds[0].text,
+            "high": info_tds[1].text,
+            "open": info_tds[3].text,
+            "low": info_tds[4].text,
+            "time": soup.select_one('.description .date').text if soup.select_one('.description .date') else "실시간",
             "is_positive": is_up,
             "is_negative": is_down
         }
