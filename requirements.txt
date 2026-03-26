@@ -7,5 +7,5 @@ feedparser
 supabase
 pandas
 yfinance
-FinanceDataReader
+finance-datareader
 numpy
