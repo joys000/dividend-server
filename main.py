@@ -20,7 +20,7 @@ app.add_middleware(
 # 글로벌 데이터 저장소
 krx_df = pd.DataFrame()
 
-# 🚨 서버가 켜질 때 안전하게 백그라운드에서 데이터를 로드하는 공식 방법
+# 🚀 서버가 켜질 때 안전하게 백그라운드에서 데이터를 로드하는 공식 방법
 @app.on_event("startup")
 def load_startup_data():
     global krx_df
@@ -31,17 +31,20 @@ def load_startup_data():
     except Exception as e:
         print(f"❌ 로딩 실패: {e}")
 
+# 1. 루트 경로 (상태 확인용 JSON 반환)
 @app.get("/")
 def read_root():
     return {"status": "alive", "message": "재우의 데이터 공장 가동 중 ⚙️"}
 
-# 2. 시장 지수 API (초경량 동기식)
-# FastAPI는 일반 def를 쓰면 자동으로 안전한 스레드에서 실행해주네.
-# 2. 시장 지수 API (독립 생존 방식 - 시차/휴장일 완벽 대응)
+# 🚨 [신규 추가] 10분마다 서버를 깨우기 위한 초경량 전용 엔드포인트
+# 스케줄러(Cron-job 등)에서 이 주소를 호출하면 'output too large' 에러가 사라집니다.
+@app.get("/ping")
+def ping():
+    return "ok"
+
 # 2. 시장 지수 API (ETF 우회 타격 방식 - 절대 에러가 나지 않음)
 @app.get("/indices")
 def get_indices():
-    # 🚨 S&P500과 나스닥을 에러 없는 ETF(SPY, QQQ)로 우회 호출! 
     tickers = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ", "SPY": "S&P 500", "QQQ": "NASDAQ"}
     indices = []
     
@@ -58,6 +61,7 @@ def get_indices():
                 
                 indices.append({
                     "name": name,
+                    "symbol": ticker,
                     "price": round(curr, 2),
                     "change": round(change, 2),
                     "pct": round(pct, 2)
@@ -70,6 +74,7 @@ def get_indices():
         return {"status": "success", "data": indices}
     else:
         return {"status": "error", "message": "모든 지수 로드 실패"}
+
 # 3. 실시간 환율 API
 @app.get("/exchange")
 def get_exchange_rate():
