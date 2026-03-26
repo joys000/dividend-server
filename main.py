@@ -7,6 +7,15 @@ import FinanceDataReader as fdr
 import pandas as pd
 from datetime import datetime
 
+import os
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from supabase import create_client, Client  # 1. 도구 가져오기
+
+# 2. 금고에서 열쇠 꺼내기 (환경 변수)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+
 app = FastAPI()
 
 # CORS 설정 (프론트엔드와 통신 허용)
