@@ -6,3 +6,4 @@ yfinance
 pandas
 lxml
 finance-datareader
+supabase
