@@ -37,40 +37,38 @@ def read_root():
 
 # 2. 시장 지수 API (초경량 동기식)
 # FastAPI는 일반 def를 쓰면 자동으로 안전한 스레드에서 실행해주네.
+# 2. 시장 지수 API (독립 생존 방식 - 시차/휴장일 완벽 대응)
 @app.get("/indices")
 def get_indices():
-    try:
-        tickers = ["^KS11", "^KQ11", "^GSPC", "^IXIC"]
-        data = yf.download(tickers, period="5d", interval="1d", progress=False)['Close']
-        
-        if data.empty or len(data) < 2:
-            return {"status": "error", "message": "데이터가 부족합니다."}
+    tickers = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ", "^GSPC": "S&P 500", "^IXIC": "NASDAQ"}
+    indices = []
+    
+    for ticker, name in tickers.items():
+        try:
+            # 🚨 각각 따로따로 5일치 데이터를 가져와서 결측치 간섭을 차단함
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="5d")
             
-        last_row = data.iloc[-1]
-        prev_row = data.iloc[-2]
-        
-        indices = []
-        names = {"^KS11": "KOSPI", "^KQ11": "KOSDAQ", "^GSPC": "S&P 500", "^IXIC": "NASDAQ"}
-        
-        for ticker in tickers:
-            if pd.isna(last_row[ticker]) or pd.isna(prev_row[ticker]):
-                continue
+            if len(hist) >= 2:
+                curr = float(hist['Close'].iloc[-1])
+                prev = float(hist['Close'].iloc[-2])
+                change = curr - prev
+                pct = (change / prev) * 100
                 
-            curr = float(last_row[ticker])
-            prev = float(prev_row[ticker])
-            change = curr - prev
-            pct = (change / prev) * 100
+                indices.append({
+                    "name": name,
+                    "price": round(curr, 2),
+                    "change": round(change, 2),
+                    "pct": round(pct, 2)
+                })
+        except Exception as e:
+            print(f"{name} 로드 실패: {e}")
+            continue # 하나가 실패해도 다른 지수들은 정상적으로 화면에 띄움
             
-            indices.append({
-                "name": names[ticker],
-                "price": round(curr, 2),
-                "change": round(change, 2),
-                "pct": round(pct, 2)
-            })
-            
+    if indices:
         return {"status": "success", "data": indices}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    else:
+        return {"status": "error", "message": "모든 지수 로드 실패"}
 
 # 3. 실시간 환율 API
 @app.get("/exchange")
