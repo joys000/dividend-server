@@ -1,24 +1,25 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import os
 import requests
-from bs4 import BeautifulSoup
+import numpy as np
+import pandas as pd
 import yfinance as yf
 import FinanceDataReader as fdr
-import pandas as pd
 from datetime import datetime
-
-import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from supabase import create_client, Client  # 1. 도구 가져오기
+from supabase import create_client, Client
+from bs4 import BeautifulSoup
 
-# 2. 금고에서 열쇠 꺼내기 (환경 변수)
+# --- ⚙️ 초기 설정 ---
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
 
 app = FastAPI()
 
-# CORS 설정 (프론트엔드와 통신 허용)
+# Supabase 클라이언트 시동
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,12 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 📦 1. 데이터 창고 (Server Warehouse) ---
-# 서버가 켜져 있는 동안 고래 데이터를 저장하는 메모리 공간이야.
-intel_storage = [] 
-MAX_INTEL_SIZE = 50 # 최신 데이터 50개까지만 보관
-
-# 글로벌 주식 데이터 로드
+# KRX 데이터 로드용 전역 변수
 krx_df = pd.DataFrame()
 
 @app.on_event("startup")
@@ -44,40 +40,62 @@ def load_startup_data():
     except Exception as e:
         print(f"❌ KRX 로딩 실패: {e}")
 
-# --- 🚀 2. 시스템 통로 (System Endpoints) ---
+# --- 헬퍼 함수: NaN(에러 숫자) 제거 ---
+def clean_nan(obj):
+    """JSON 전송 시 에러를 유발하는 NaN 값을 None으로 변환"""
+    if isinstance(obj, list):
+        return [clean_nan(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: clean_nan(v) for k, v in obj.items()}
+    elif isinstance(obj, float) and np.isnan(obj):
+        return None
+    return obj
+
+# --- 🚀 핵심 시스템 통로 (DB 연결) ---
 
 @app.get("/")
 def read_root():
     return {"status": "alive", "message": "재우의 데이터 공장 가동 중 ⚙️"}
 
-# 🚨 스케줄러 'output too large' 에러 해결용 초경량 통로
 @app.get("/ping")
 def ping():
     return "ok"
 
-# 🐋 고래 데이터 입구 (봇이 데이터를 쏘는 곳)
+# 🐋 뉴스/고래 데이터 입구 (DB에 진짜 저장)
 @app.post("/update_intel")
 async def update_intel(data: dict):
-    global intel_storage
-    data['timestamp'] = datetime.now().strftime("%H:%M") # 수집 시간 기록
-    
-    # 중복 데이터 체크 (티커와 금액이 같으면 무시)
-    if any(i.get('symbol') == data.get('symbol') and i.get('value') == data.get('value') for i in intel_storage):
-        return {"status": "ignored"}
+    try:
+        # 1. 수집 시간 기록 및 NaN 제거
+        data['timestamp'] = datetime.now().strftime("%H:%M")
+        clean_data = clean_nan(data)
+        
+        # 2. 🚨 DB(Supabase)에 직접 입고
+        # 'intel_data' 테이블에 한 줄 추가해!
+        res = supabase.table("intel_data").insert(clean_data).execute()
+        
+        print(f"✅ DB 입고 성공: {clean_data.get('title', clean_data.get('symbol'))[:15]}...")
+        return {"status": "success"}
+    except Exception as e:
+        print(f"❌ DB 저장 실패: {e}")
+        return {"status": "error", "message": str(e)}
 
-    intel_storage.insert(0, data) # 최신 데이터를 맨 앞으로
-    if len(intel_storage) > MAX_INTEL_SIZE:
-        intel_storage.pop()
-    
-    print(f"🐋 창고 입고 성공: {data.get('symbol')}")
-    return {"status": "success"}
-
-# 📡 웹사이트용 데이터 출구 (브라우저가 데이터를 가져가는 곳)
+# 📡 웹사이트용 데이터 출구 (DB에서 데이터 꺼내오기)
 @app.get("/get_intel")
-def get_intel():
-    return {"status": "success", "data": intel_storage[:10]}
+async def get_intel():
+    try:
+        # 3. 🚨 주머니(메모리)가 아니라 창고(DB)에서 최신 20개 가져와!
+        res = supabase.table("intel_data")\
+            .select("*")\
+            .order("id", desc=True)\
+            .limit(20)\
+            .execute()
+            
+        return {"status": "success", "data": res.data}
+    except Exception as e:
+        print(f"❌ DB 조회 실패: {e}")
+        return {"status": "error", "data": []}
 
-# --- 📊 3. 기존 주식 API 기능들 (유지) ---
+# --- 📊 주식 정보 API (기존 기능 유지) ---
 
 @app.get("/indices")
 def get_indices():
@@ -96,7 +114,8 @@ def get_indices():
                     "price": round(curr, 2), "change": round(change, 2), "pct": round((change/prev)*100, 2)
                 })
         except: continue
-    return {"status": "success", "data": indices}
+    # 🚨 여기서도 NaN 에러 방지를 위해 클리닝
+    return {"status": "success", "data": clean_nan(indices)}
 
 @app.get("/exchange")
 def get_exchange_rate():
@@ -104,8 +123,8 @@ def get_exchange_rate():
         url = "https://finance.naver.com/marketindex/"
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
         soup = BeautifulSoup(res.text, "html.parser")
-        rate = float(soup.select_one(".value").text.replace(",", ""))
-        return {"status": "success", "rate": rate}
+        rate_text = soup.select_one(".value").text.replace(",", "")
+        return {"status": "success", "rate": float(rate_text)}
     except: return {"status": "error"}
 
 @app.get("/dividend/{ticker}")
