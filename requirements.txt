@@ -1,10 +1,10 @@
 fastapi
 uvicorn
-supabase
 requests
 beautifulsoup4
-yfinance
+deep-translator
+feedparser
+supabase
 pandas
-lxml
-finance-datareader
-
+yfinance
+FinanceDataReader
