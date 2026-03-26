@@ -19,6 +19,30 @@ app.add_middleware(
 
 # 글로벌 데이터 저장소
 krx_df = pd.DataFrame()
+# --- [신규 추가] 고래 & 뉴스 데이터 창고 ---
+# 실제 운영 환경에서는 DB를 써야 하지만, 우선 서버가 켜져 있는 동안 유지되는 메모리 저장소를 씁니다.
+whale_storage = [] 
+MAX_STORAGE_SIZE = 50 # 최신 데이터 50개까지만 보관
+
+# 1. 고래(내부자 거래) 데이터를 받는 입구 (POST)
+# 네 whale_tracker.py에서 이 주소로 데이터를 쏴줄 거야.
+@app.post("/update_whales")
+async def update_whales(data: dict):
+    global whale_storage
+    # 새로운 데이터를 리스트 맨 앞에 추가 (최신순)
+    whale_storage.insert(0, data)
+    
+    # 너무 많이 쌓이면 오래된 건 삭제
+    if len(whale_storage) > MAX_STORAGE_SIZE:
+        whale_storage.pop()
+    
+    print(f"🐋 새로운 고래 포착: {data.get('symbol')}")
+    return {"status": "success", "message": "창고에 저장 완료"}
+
+# 2. 저장된 데이터를 웹사이트에 주는 출구 (GET)
+@app.get("/get_whales")
+def get_whales():
+    return {"status": "success", "data": whale_storage}
 
 # 🚀 서버가 켜질 때 안전하게 백그라운드에서 데이터를 로드하는 공식 방법
 @app.on_event("startup")
